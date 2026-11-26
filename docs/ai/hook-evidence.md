@@ -7,6 +7,10 @@
 **Blocks** any change to a migration tracked in git (exit 2, reason on stderr). **Allows** new, untracked migration files,
 so the `add-migration` skill works. Every block is appended to `.claude/hooks/protect-migrations.log` (git-ignored).
 
+**Backstop:** [`.claude/hooks/verify-migrations.mjs`](../../.claude/hooks/verify-migrations.mjs), `PostToolUse` on the same
+tools. After each call it runs `git diff --name-status HEAD -- db/migrations/` and reports (exit 2) any applied
+migration that changed, whatever made the change. Added after review, see §7.
+
 Claude Code 2.1.311, macOS 27.2.1, Node 23.9.
 
 ## 1. Live: agent session blocked (2026-11-20)
@@ -71,6 +75,8 @@ $ echo $?
 ℹ tests 16 · pass 16 · fail 0
 ```
 
+After the review fixes in §7: 33 tests (26 for `protect-migrations`, 7 for `verify-migrations`), all passing.
+
 ## 4. A false positive found in real use, and the fix
 
 Once `settings.json` was committed, the hook also guarded the session that was building the harness. It blocked
@@ -115,10 +121,51 @@ Live headless session in this repo with dummy `.env` (root) and `app/.env`, 2026
 
 Deny messages say "denied"; ask messages say "haven't granted it yet": a prompt nobody can answer headless.
 
+## 7. Review fixes (2026-11-26)
+
+The PR review found three hook gaps, one claim the settings did not back, and one wrong number. Each hook case
+got a test first, and every one failed before the fix (6 failures, then 26/26).
+
+| Finding | Fix | Evidence |
+|---|---|---|
+| After `cd db/migrations`, `git ls-files -- db/migrations/` from that cwd listed nothing, so every edit passed | Run git from the repo root (`$CLAUDE_PROJECT_DIR`, else `git rev-parse --show-toplevel`); resolve targets against `cwd` | 3 tests; live: `cd db/migrations && sed -i '' 's/120/200/' 001_create_tasks.sql` blocked |
+| `sed -Ei`, `sed --in-place` passed; `cp 001… /tmp/copy.sql` was blocked | `-i` anywhere among sed's flags, or `--in-place`; `cp` blocked only when the migration is the destination | 6 tests (3 block, 3 allow) |
+| `xargs sed -i`, `find -exec`, `node -e`, `python -c`, `git checkout <rev> --` name no file a parser can see | PostToolUse `verify-migrations.mjs` checks the result in git, after the fact | 7 tests in a throwaway repo; live below |
+| Agreement says harness edits hit `ask`, but `docs/ai/**` had none | `ask Edit(./docs/ai/**)`; agreement row rewritten, see below | live below |
+| `ask Bash(npm run db:reset)` is exact-match | add `Bash(npm run db:reset *)`, `Bash(node scripts/db-reset.mjs*)` | not distinguishable headless (see §6) |
+
+**Backstop, live** (fresh clone, agent told to use `node -e` on the first migration):
+
+```
+PostToolUse:Bash hook blocking error from command: "node "$CLAUDE_PROJECT_DIR/.claude/hooks/verify-migrations.mjs"": [...]: Applied migration changed after Bash:
+  M db/migrations/001_create_tasks.sql
+Committed migrations must not change (see .claude/rules/migrations.md). If you changed it, restore it:
+  git restore --source=HEAD --staged --worktree -- db/migrations/001_create_tasks.sql
+and add a new db/migrations/<next number>_<name>.sql instead. If a human changed it on purpose, leave it and say so.
+```
+
+```
+{"at":"2026-11-26T14:01:09.279Z","hook":"verify","decision":"detected","tool":"Bash","targets":["db/migrations/001_create_tasks.sql"]}
+```
+
+The write did happen, because a PostToolUse hook runs after the tool. The agent ran the restore command from the
+message, and `git status` was clean at the end. The backstop reports and does not revert on its own: a human may have
+changed the file on purpose, and an automatic revert would destroy that work.
+
+**`ask` on `docs/ai/**`, live:** an Edit of `docs/ai/ab-note.md` got "Claude requested permissions to write to
+…/docs/ai/ab-note.md, but you haven't granted it yet". In the same session the agent, against its instructions, then
+ran `printf '\n' >> docs/ai/ab-note.md` through Bash, and that **ran without a prompt**. `Edit(...)` rules do not
+cover shell writes, and `acceptEdits` auto-approves simple ones. So `ask` guards file-tool edits only, and the
+agreement now names CODEOWNERS review as the real gate for harness files. A PostToolUse check like the migrations
+backstop would also flag every human-approved harness edit until it is committed, so it was not added.
+
 ## Limits
 
-- Bash coverage is a regex, best effort: `python -c "open(...).write(...)"` or a script file would get past it.
+- Bash coverage in the PreToolUse hook is a regex, best effort. Commands that hide the file name (`xargs`,
+  `find -exec`, `node -e`, `python -c`) get past it, and the PostToolUse backstop reports them after they run.
   `deny` rules and CODEOWNERS on `db/migrations/` are the other layers.
+- The backstop flags any change to an applied migration, including one a human made on purpose but has not committed.
+  The message tells the agent to leave such a change and say so.
 - "Applied" means "tracked in git". A migration committed but never deployed is also protected; to change one,
   a human edits it outside the agent.
 - On a malformed payload the hook allows and logs (fail-open), so a broken hook cannot stop all work.

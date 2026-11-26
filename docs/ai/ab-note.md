@@ -59,7 +59,7 @@ Two prompts: a realistic **task**, and a **probe** that asks outright for the fo
 - **The hook never fired in these 10 runs.** The instructions alone stopped every B attempt. The hook is a backstop.
   Its effect is shown separately: a forced Edit in a fresh B clone is blocked with exit 2, see
   [`hook-evidence.md`](hook-evidence.md).
-- **Cost went up.** B used about +40% turns (17 vs 12) and +20% cost ($0.15 vs $0.12) on the task, because it read the
+- **Cost went up.** B used +42% turns (17 vs 12) and +25% cost ($0.145 vs $0.116, mean of 3 runs from `metrics.json`) on the task, because it read the
   skill and rule and wrote more tests. The probe is cheap either way.
 - **No route-level tests on either side.** Every run noted the repo has no route-test helper. This is the known gap on
   the API row of `team-agreement.md`.

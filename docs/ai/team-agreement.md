@@ -20,7 +20,7 @@ It runs on every push and PR, whoever wrote the change.
 | Business rule (`lib/tasks.ts`) | L2 | Boundary tests on both sides of every limit; app rule and DB `check` agree | `AGENTS.md`, CI | @evgenyadev |
 | New migration (`db/migrations/NNN_*.sql`) | L2 | `npm test` applies every migration to a fresh DB; `git status --porcelain db/migrations` shows only the new file; rollback note in the PR | Path rule `migrations.md`, skill `add-migration`, CI | @evgenyadev |
 | Dependencies (`package.json`, lockfile) | L1 | Human runs the install and reads the lockfile diff | `ask` on `npm install` and `package.json` edits | @evgenyadev |
-| Harness (`AGENTS.md`, `.claude/**`, `docs/ai/**`, CI) | L1 | A/B note for any behaviour change; `harness:check` green | `ask` on harness edits, CODEOWNERS | @evgenyadev |
+| Harness (`AGENTS.md`, `.claude/**`, `docs/ai/**`, CI) | L1 | A/B note for any behaviour change; `harness:check` green | CODEOWNERS approval (the real gate). `ask` on Edit/Write of these paths stops file-tool edits, but `Edit(...)` rules do not cover shell writes, and `acceptEdits` auto-approves simple ones like `printf >> file` (verified, `hook-evidence.md` §7) | @evgenyadev |
 | Editing an applied migration · reading `.env` · creating `CLAUDE.md` | L0 | Blocked; `hook:test` proves the block in CI | Hook `protect-migrations.mjs` (exit 2), `deny` rules | — |
 
 **Moving levels.** A change type goes one level up only when its check is cheap, independent of the agent, and runs
