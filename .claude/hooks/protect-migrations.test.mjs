@@ -11,9 +11,9 @@ const root = join(import.meta.dirname, "..", "..");
 const hook = join(import.meta.dirname, "protect-migrations.mjs");
 const logFile = join(import.meta.dirname, "test-run.log");
 
-function run(tool_name, tool_input) {
+function run(tool_name, tool_input, cwd = root) {
   const r = spawnSync("node", [hook], {
-    input: JSON.stringify({ tool_name, tool_input, cwd: root }),
+    input: JSON.stringify({ tool_name, tool_input, cwd }),
     env: { ...process.env, CLAUDE_PROJECT_DIR: root, PROTECT_MIGRATIONS_LOG: logFile },
     encoding: "utf8",
   });
@@ -51,6 +51,21 @@ test("blocks a BOM-prefixed payload (Windows PowerShell pipe)", () => {
   assert.equal(r.status, 2);
 });
 
+// Review of PR #9: after `cd db/migrations`, git ls-files from that cwd listed nothing and everything passed.
+const migrationsDir = join(root, "db", "migrations");
+
+test("blocks Edit by absolute path when the session cwd is db/migrations", () => {
+  assert.equal(run("Edit", { file_path: join(root, applied) }, migrationsDir).code, 2);
+});
+
+test("blocks Edit by bare file name when the session cwd is db/migrations", () => {
+  assert.equal(run("Edit", { file_path: "001_create_tasks.sql" }, migrationsDir).code, 2);
+});
+
+test("blocks Bash sed on a bare file name when the session cwd is db/migrations", () => {
+  assert.equal(run("Bash", { command: "sed -i 's/120/200/' 001_create_tasks.sql" }, migrationsDir).code, 2);
+});
+
 test("allows a new migration file", () => {
   assert.equal(run("Write", { file_path: "db/migrations/003_add_priority.sql" }).code, 0);
 });
@@ -65,11 +80,22 @@ for (const command of [
   `npm test && rm ${applied}`,
   `mv ${applied} /tmp/x.sql`,
   `echo x > ${applied.toUpperCase()}`,
+  `sed -Ei 's/120/200/' ${applied}`,
+  `sed --in-place 's/120/200/' ${applied}`,
+  `sed -n -i 's/120/200/' ${applied}`,
+  `cp /tmp/other.sql ${applied}`,
 ]) {
   test(`blocks Bash: ${command}`, () => assert.equal(run("Bash", { command }).code, 2));
 }
 
-for (const command of [`cat ${applied}`, `grep check ${applied} > out.txt; rm -f out.txt`, "ls db/migrations"]) {
+for (const command of [
+  `cat ${applied}`,
+  `grep check ${applied} > out.txt; rm -f out.txt`,
+  "ls db/migrations",
+  `cp ${applied} /tmp/copy.sql`,
+  `sed -n '1,5p' ${applied}`,
+  `sed -E 's/a/b/' ${applied} > /tmp/out.sql`,
+]) {
   test(`allows Bash: ${command}`, () => assert.equal(run("Bash", { command }).code, 0));
 }
 

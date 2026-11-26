@@ -7,12 +7,17 @@
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 
 const MIGRATIONS = "db/migrations/";
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-// Shell verbs that change or remove a file. Best effort: a determined shell command can always get around a regex.
-const MUTATING = /\b(sed\s+(-\w+\s+)*-i|perl\s+-\w*i|rm|mv|cp|truncate|tee|dd)\b/;
+// Shell verbs that change or remove a file. Best effort: a determined shell command can always get around a regex;
+// verify-migrations.mjs (PostToolUse) checks the result for whatever this misses.
+const MUTATING = /\b(perl\s+-\w*i|rm|mv|truncate|tee|dd)\b/i;
+// sed edits in place with -i anywhere among its flags (-i, -Ei, -n -i) or --in-place.
+const SED_IN_PLACE = /\bsed\s(?:[^|;&]*\s)?(?:-[A-Za-z]*i[A-Za-z]*|--in-place)(?=[\s=]|$)/;
+// cp changes only its destination, so copying an applied migration elsewhere is fine.
+const copiesOnto = (segment, name) => /\bcp\b/.test(segment) && segment.trim().split(/\s+/).pop().toLowerCase().endsWith(name.toLowerCase());
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
 const logFile = process.env.PROTECT_MIGRATIONS_LOG ?? join(projectDir, ".claude", "hooks", "protect-migrations.log");
@@ -25,8 +30,13 @@ function log(entry) {
   }
 }
 
-function trackedMigrations(cwd) {
-  const out = execFileSync("git", ["ls-files", "--", MIGRATIONS], { cwd, encoding: "utf8" });
+// Always ask git from the repo root: `git ls-files -- db/migrations/` run from inside db/migrations lists nothing.
+function repoRoot(cwd) {
+  return execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" }).trim();
+}
+
+function trackedMigrations(root) {
+  const out = execFileSync("git", ["ls-files", "--", MIGRATIONS], { cwd: root, encoding: "utf8" });
   return out.split("\n").filter(Boolean);
 }
 
@@ -52,15 +62,15 @@ try {
 const cwd = payload.cwd ?? projectDir;
 const tool = payload.tool_name;
 const input = payload.tool_input ?? {};
-const tracked = trackedMigrations(cwd);
+const root = process.env.CLAUDE_PROJECT_DIR ?? repoRoot(cwd);
+const tracked = trackedMigrations(root);
 // macOS and Windows file systems ignore case by default: DB/Migrations/001_X.SQL opens the same file. Compare folded.
 const fold = (s) => s.toLowerCase();
 const trackedByKey = new Map(tracked.map((f) => [fold(f), f]));
 
 if (EDIT_TOOLS.has(tool)) {
   const raw = input.file_path ?? input.notebook_path ?? "";
-  const abs = isAbsolute(raw) ? raw : join(cwd, raw);
-  const rel = relative(cwd, abs).split("\\").join("/");
+  const rel = relative(root, resolve(cwd, raw)).split("\\").join("/");
   const hit = trackedByKey.get(fold(rel));
   if (hit) {
     block(tool, hit, "Existing databases already ran it; lib/db.ts will never re-apply the edited version.");
@@ -73,7 +83,7 @@ if (EDIT_TOOLS.has(tool)) {
       const name = basename(file);
       if (!fold(segment).includes(fold(name))) continue;
       const redirectInto = new RegExp(`>\\s*\\S*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i");
-      if (MUTATING.test(segment) || redirectInto.test(segment)) {
+      if (MUTATING.test(segment) || SED_IN_PLACE.test(segment) || copiesOnto(segment, name) || redirectInto.test(segment)) {
         block(tool, file, `The shell command would modify it: ${segment.trim()}`);
       }
     }

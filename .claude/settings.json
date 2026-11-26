@@ -14,11 +14,14 @@
       "Bash(npm i:*)",
       "Bash(npm uninstall:*)",
       "Bash(npm run db:reset)",
+      "Bash(npm run db:reset *)",
+      "Bash(node scripts/db-reset.mjs*)",
       "Bash(git push:*)",
       "Edit(./package.json)",
       "Edit(./AGENTS.md)",
       "Edit(./.claude/**)",
-      "Edit(./.github/**)"
+      "Edit(./.github/**)",
+      "Edit(./docs/ai/**)"
     ],
     "deny": [
       "Read(./.env)",
@@ -47,6 +50,17 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-migrations.mjs\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/verify-migrations.mjs\""
           }
         ]
       }
