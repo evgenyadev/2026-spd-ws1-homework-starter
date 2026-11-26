@@ -2,7 +2,7 @@
 // Run: npm run hook:test. Each test works in a throwaway git repo, never in this one.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -65,6 +65,28 @@ test("allows a new migration, untracked or staged", () => {
 test("works when the session cwd is db/migrations", () => {
   writeFileSync(join(repo, "db/migrations/001_create.sql"), "changed\n");
   assert.equal(run(join(repo, "db", "migrations")).code, 2);
+});
+
+test("outside a git repo: allows and logs, does not crash", () => {
+  const dir = mkdtempSync(join(tmpdir(), "no-git-"));
+  const env = { ...process.env, PROTECT_MIGRATIONS_LOG: join(dir, "hook.log") };
+  delete env.CLAUDE_PROJECT_DIR;
+  try {
+    const r = spawnSync("node", [hook], { input: JSON.stringify({ tool_name: "Bash", cwd: dir }), env, encoding: "utf8" });
+    assert.equal(r.status, 0);
+    assert.match(readFileSync(join(dir, "hook.log"), "utf8"), /"decision":"allow".*git failed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("still reports when the log file cannot be written", () => {
+  writeFileSync(join(repo, "db/migrations/001_create.sql"), "changed\n");
+  const r = spawnSync("node", [hook], {
+    input: JSON.stringify({ tool_name: "Bash", cwd: repo }),
+    env: { ...process.env, CLAUDE_PROJECT_DIR: repo, PROTECT_MIGRATIONS_LOG: "/nonexistent-dir/hook.log" },
+  });
+  assert.equal(r.status, 2);
 });
 
 test("fails open on a malformed payload", () => {

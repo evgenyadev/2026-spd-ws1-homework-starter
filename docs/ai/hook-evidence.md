@@ -75,7 +75,8 @@ $ echo $?
 ℹ tests 16 · pass 16 · fail 0
 ```
 
-After the review fixes in §7: 33 tests (26 for `protect-migrations`, 7 for `verify-migrations`), all passing.
+After the review fixes in §7 and the gap pass in §8: 45 tests (36 for `protect-migrations`, 9 for
+`verify-migrations`), all passing.
 
 ## 4. A false positive found in real use, and the fix
 
@@ -158,6 +159,34 @@ ran `printf '\n' >> docs/ai/ab-note.md` through Bash, and that **ran without a p
 cover shell writes, and `acceptEdits` auto-approves simple ones. So `ask` guards file-tool edits only, and the
 agreement now names CODEOWNERS review as the real gate for harness files. A PostToolUse check like the migrations
 backstop would also flag every human-approved harness edit until it is committed, so it was not added.
+
+## 8. What is tested and what is not (2026-11-26)
+
+A pass over paths no test reached. One was a real bug: outside a git repo, `protect-migrations.mjs` crashed with
+exit 1. That does not block, so the call went through, as intended on a failure, but nothing was logged. It now
+catches the git error, logs `"decision":"allow"`, and exits 0, the same as `verify-migrations.mjs`.
+
+| Now covered by tests | Result before |
+|---|---|
+| Outside a git repo, both hooks: allow and log | `protect`: crash, exit 1, no log. **Fixed** |
+| `MultiEdit`, `NotebookEdit` (`notebook_path`) on an applied migration | already blocked, untested |
+| No `CLAUDE_PROJECT_DIR`: root found with `git rev-parse` from a subdirectory | already worked, untested |
+| Log file not writable: the decision is unchanged, both hooks | already worked, untested |
+| `perl -pi`, `truncate`, `tee`, `dd of=`, a bare `rm` | already blocked, untested |
+
+Measured: the backstop takes about 0.05 s per tool call (10 runs, macOS).
+
+**Still not tested:**
+- Windows: BOM and case handling are covered on macOS only.
+- `ask` prompts in an interactive session. All live runs were headless, where `ask` shows as "not granted".
+- `ask` on `db:reset` variants. Headless mode cannot tell it apart from the default Bash prompt.
+- The A/B was not rerun after the review fixes.
+- Quoted text and heredocs that only *mention* a mutating command next to a migration name are still blocked
+  (false positive, fails closed).
+
+No finite test list proves a command parser complete. The backstop is what makes coverage complete for its one job:
+any change to an applied migration shows up in `git diff`, whatever made it. It can only report afterwards, not
+prevent.
 
 ## Limits
 

@@ -62,8 +62,17 @@ try {
 const cwd = payload.cwd ?? projectDir;
 const tool = payload.tool_name;
 const input = payload.tool_input ?? {};
-const root = process.env.CLAUDE_PROJECT_DIR ?? repoRoot(cwd);
-const tracked = trackedMigrations(root);
+let root;
+let tracked;
+try {
+  root = process.env.CLAUDE_PROJECT_DIR ?? repoRoot(cwd);
+  tracked = trackedMigrations(root);
+} catch (e) {
+  // Not a git repo, or git missing: nothing is "applied", so allow, as on a bad payload. Without this catch the
+  // hook crashed with exit 1, which also allows, but silently.
+  log({ decision: "allow", error: `git failed: ${e.message.split("\n")[0]}` });
+  process.exit(0);
+}
 // macOS and Windows file systems ignore case by default: DB/Migrations/001_X.SQL opens the same file. Compare folded.
 const fold = (s) => s.toLowerCase();
 const trackedByKey = new Map(tracked.map((f) => [fold(f), f]));

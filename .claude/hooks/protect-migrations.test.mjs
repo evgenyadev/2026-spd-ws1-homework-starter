@@ -2,7 +2,8 @@
 // Run: npm run hook:test
 
 import { spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,10 +12,13 @@ const root = join(import.meta.dirname, "..", "..");
 const hook = join(import.meta.dirname, "protect-migrations.mjs");
 const logFile = join(import.meta.dirname, "test-run.log");
 
-function run(tool_name, tool_input, cwd = root) {
+// env: extra variables; a variable set to undefined is removed (e.g. CLAUDE_PROJECT_DIR, to test the git fallback).
+function run(tool_name, tool_input, cwd = root, env = {}) {
+  const merged = { ...process.env, CLAUDE_PROJECT_DIR: root, PROTECT_MIGRATIONS_LOG: logFile, ...env };
+  for (const [k, v] of Object.entries(merged)) if (v === undefined) delete merged[k];
   const r = spawnSync("node", [hook], {
     input: JSON.stringify({ tool_name, tool_input, cwd }),
-    env: { ...process.env, CLAUDE_PROJECT_DIR: root, PROTECT_MIGRATIONS_LOG: logFile },
+    env: merged,
     encoding: "utf8",
   });
   return { code: r.status, stderr: r.stderr };
@@ -66,6 +70,36 @@ test("blocks Bash sed on a bare file name when the session cwd is db/migrations"
   assert.equal(run("Bash", { command: "sed -i 's/120/200/' 001_create_tasks.sql" }, migrationsDir).code, 2);
 });
 
+test("blocks MultiEdit of an applied migration", () => {
+  assert.equal(run("MultiEdit", { file_path: applied, edits: [] }).code, 2);
+});
+
+test("blocks NotebookEdit addressed by notebook_path", () => {
+  assert.equal(run("NotebookEdit", { notebook_path: applied }).code, 2);
+});
+
+test("finds the repo root with git when CLAUDE_PROJECT_DIR is unset", () => {
+  const r = run("Edit", { file_path: "001_create_tasks.sql" }, migrationsDir, { CLAUDE_PROJECT_DIR: undefined });
+  assert.equal(r.code, 2);
+});
+
+test("outside a git repo: allows and logs, does not crash", () => {
+  const dir = mkdtempSync(join(tmpdir(), "no-git-"));
+  const log = join(dir, "hook.log");
+  try {
+    const r = run("Edit", { file_path: "x.sql" }, dir, { CLAUDE_PROJECT_DIR: undefined, PROTECT_MIGRATIONS_LOG: log });
+    assert.equal(r.code, 0);
+    assert.match(readFileSync(log, "utf8"), /"decision":"allow".*git failed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("still blocks when the log file cannot be written", () => {
+  const r = run("Edit", { file_path: applied }, root, { PROTECT_MIGRATIONS_LOG: "/nonexistent-dir/hook.log" });
+  assert.equal(r.code, 2);
+});
+
 test("allows a new migration file", () => {
   assert.equal(run("Write", { file_path: "db/migrations/003_add_priority.sql" }).code, 0);
 });
@@ -84,6 +118,11 @@ for (const command of [
   `sed --in-place 's/120/200/' ${applied}`,
   `sed -n -i 's/120/200/' ${applied}`,
   `cp /tmp/other.sql ${applied}`,
+  `perl -pi -e 's/120/200/' ${applied}`,
+  `truncate -s 0 ${applied}`,
+  `echo x | tee ${applied}`,
+  `dd if=/dev/null of=${applied}`,
+  `rm ${applied}`,
 ]) {
   test(`blocks Bash: ${command}`, () => assert.equal(run("Bash", { command }).code, 2));
 }
